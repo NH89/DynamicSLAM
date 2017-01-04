@@ -1,2 +1,2 @@
 # DynamicSLAM
-Dense passive monocular SLAM for independtly moving and deforming objects.
+Dense passive monocular SLAM for independently moving and deforming objects.
