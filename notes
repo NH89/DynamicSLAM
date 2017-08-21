@@ -1,0 +1,471 @@
+
+
+precompute - Jacobian of warp wrt infinitessimal params
+rot, trans, intrinsics, distortion,
+depth, vel, illum, reflectance
+
+
+
+Select Keyframe
+
+Canny edge detector => select points for camera tracking
+http://docs.opencv.org/3.2.0/da/d5c/tutorial_canny_detector.html
+NB track edges in each of LAB, but higher res in L.
+
+Find image gradient at those points
+
+
+For each frame 
+Make image pyramid (first version use small monochrome image).
+Use LAB colourspace (luminance, red-green, bue-yellow) for humanlike perception
+Predict camera transform from previous vel & accel
+
+
+For each iteration
+warp keyframe canny points to by predicted warp
+
+find photometric difference at warped points 
+
+find image spatial gradient in current frame at warped points 
+
+update warp Rot, Trans 
+
+until (fit threshold reached or max num iterations) 
+
+If <max iter then drop to next level of image column
+select Rect  for next layer by transform from previous layer.  (ie allow large foveal tracking motion).
+
+
+
+Given sparse camera tracking =>  dense mapping
+
+1)Using higher detail sobel filter of top of image column 
+update warp cam intrinsics (mostly if zoom lens or start of sequence)
+update warp lens distortion (mostly in top of image column)
+
+
+2)Dense image grad of tracked warp, now one iteration each of :   ? switch to German-McClure cost function ? 
+update warp depth map  - TV_L1 cost
+update warp vel map - TV_L1 cost
+update warp illum & refelectance maps  - TV_L1, pallate based 
+
+NB complexity cost fns
+
+
+3) Every 10 frames 
+update illum & reflectance pallates 
+update  Jacobian wrt illum and ref 
+update light sources 
+
+
+
+
+##################################
+
+
+
+
+//  inverse compositional framework 
+/*
+ * Precompute:
+ * Evaluate gradient Del_T of the template T(x)
+ * Evaluate Jacobian  deltaW/deltaP  at (x;0)
+ * Compute steepest descent images  DelT deltaW/deltaP
+ * Compute the Hessian matrix H = Sum_x [DelT deltaW/deltaP]^T  [DelT deltaW/deltaP]
+ * 
+ * Iterate:
+ * Warp I with W(x;p) to compute I(W(x;p) )
+ * Compute    Sum_x [DelT deltaW/deltaP]^T  [ I(W(x;p) )  -  T(x) ]
+ * Compute    deltaP  =  H^(-1)  Sum_x [DelT deltaW/deltaP]^T  [ I(W(x;p) )  -  T(x) ]
+ * Update warp W(x;p) <- W(x;p) o W(x;deltaP)^(-1)
+ * 
+ * Until ||deltaP|| <= epsilon
+ * 
+ */
+
+
+
+// rgbdtam tracking
+/*
+ * sparsify by extracting edges using Canny detector
+ * 
+ * Photometric error   r_ph = sum_i   [ wP ( keyframe  -  a*curr_frame  +b )^2  /  sigma^2_ph ]
+ * where wP is the German-McClure cost function
+ * 
+ * {T^,a^,b^} = argmin(T,a,b)  r_ph
+ * where a=gain, b=brightness, T=transformation
+ * rotation R  is mapped to tangent space so(3) of rotation group SO(3).
+ * 
+ * T^f_w curr_frame to global_ref_frame is computed by inverse compositional approach.
+ * 
+ * 
+ */
+ 
+ 
+ ###################################
+ 
+Mat App::build_rotation_matrix(float rot[3]){
+     // build projection matrix
+    rot_x = Mat::eye(3,3,CV_32F);
+    rot_y = Mat::eye(3,3,CV_32F);
+    rot_z = Mat::eye(3,3,CV_32F);
+    trans = Mat::zeros(3,1,CV_32F);
+
+    rot_x.at<float>(2,2)=cos(rot[0]);
+    rot_x.at<float>(2,3)=-sin(rot[0]);
+    rot_x.at<float>(3,2)=sin(rot[0]);
+    rot_x.at<float>(3,3)=cos(rot[0]);
+    
+    rot_y.at<float>(1,1)=cos(rot[1]);
+    rot_y.at<float>(1,3)=sin(rot[1]);
+    rot_y.at<float>(3,1)=-sin(rot[1]);
+    rot_y.at<float>(3,3)=cos(rot[1]);
+   
+    rot_z.at<float>(1,1)=cos(rot[2]);
+    rot_z.at<float>(1,2)=-sin(rot[2]);
+    rot_z.at<float>(2,1)=sin(rot[2]);
+    rot_z.at<float>(2,2)=cos(rot[2]);
+    
+    Mat rotation;
+    return rotation = rot_x * rot_y * rot_z ;
+}
+
+Mat App::build_extrinsic(float transfm[6]){
+     // build projection matrix
+    rot_x.eye(3,3,CV_32F);
+    rot_y.eye(3,3,CV_32F);
+    rot_z.eye(3,3,CV_32F);
+    trans.zeros(3,1,CV_32F);
+    
+    rot_x.at<float>(2,2)=cos(transfm[0]);
+    rot_x.at<float>(2,3)=-sin(transfm[0]);
+    rot_x.at<float>(3,2)=sin(transfm[0]);
+    rot_x.at<float>(3,3)=cos(transfm[0]);
+    
+    rot_y.at<float>(1,1)=cos(transfm[1]);
+    rot_y.at<float>(1,3)=sin(transfm[1]);
+    rot_y.at<float>(3,1)=-sin(transfm[1]);
+    rot_y.at<float>(3,3)=cos(transfm[1]);
+   
+    rot_z.at<float>(1,1)=cos(transfm[2]);
+    rot_z.at<float>(1,2)=-sin(transfm[2]);
+    rot_z.at<float>(2,1)=sin(transfm[2]);
+    rot_z.at<float>(2,2)=cos(transfm[2]);
+    
+    trans.at<float>(1,1)=transfm[3];
+    trans.at<float>(2,1)=transfm[4];
+    trans.at<float>(3,1)=transfm[5];
+    
+    Mat extrinsic;
+    hconcat( (rot_x * rot_y * rot_z),  trans, extrinsic );
+    return extrinsic;
+} 
+ 
+ 
+void App::track_camera_rotation(){
+    // inverse of projection matrix converts pixel direction vectors to camera frame 3D points
+    /*
+     * K^(-1)  = ( 1/fu   0    -u0/fu  )
+     *                 (  0    1/fv  -v0/fv  )
+     *                 (  0      0         1    )
+     */
+    
+    // predict image 
+    // Im = In K R K^(-1)
+    
+    
+    // photometric difference
+    
+    // costfunctions ? 
+    
+
+    // jacobian of predicted image
+    
+    // jacobian of new frame
+    
+    // jacobian of rotation matrix (ie how it would move the predicted pixels)
+    
+}
+ 
+ void App::track_camera_rotation_old(){
+    float improvement =0;
+    float prev_cost = PIXELS;                  // set high default for the fiirst itteration.
+    float tot_cost[7];                                // use float in case cost is very large. 
+    float thresh = 1.0;                             // for Huber norm
+    do{
+    float rotations[7][3];
+    for(int i=0;i<3;++i){
+        for(int j=0;j<7;++j){
+            rotations[j][i]=rotation[i];
+        }
+    }
+    rotations[1][0] += 0.01;                           //pitch about x axis
+    rotations[2][1] += 0.01;                           //yaw about y axis
+    rotations[3][2] += 0.01;                           //roll about z axis
+    rotations[4][0] -= 0.01;                             // -ve steps
+    rotations[5][1] -= 0.01;
+    rotations[6][2] -= 0.01;
+
+    Mat projections[7];
+    for(int i=0;i<7;++i){ projections[i]  = intrinsic * build_rotation_matrix(rotations[i]); }    
+    
+    int yd = y0 - ROWS;                              // yd= -ROWS/2                    // image centre x0=COLS/2, y0=ROWS/2
+    int xd0 = x0 - COLS;                             // xd0 = -COLS/2                   // xd, yd = pixel offsets from optical centre of image
+    int xd;
+    for(int i=1;i<=ROWS;++i, ++yd){
+         xd=xd0;
+        for(int j=0 ;j<=COLS;++j, ++xd){ 
+            Vec3f old_pt;                                                                             // x,y,z world coords of point
+            old_pt[0] = xd/fx;
+            old_pt[1] = yd/fy;
+            old_pt[2] = 1;
+            for(int k=0;k<7;++k){                                                            // for each of our 7 rotation matrices 
+                Mat new_pt  = projections[k] * Mat(old_pt);
+                int px_col     = floor( new_pt.at<float>(1) / new_pt.at<float>(3) );
+                int px_row    = floor( new_pt.at<float>(2) / new_pt.at<float>(3) );
+                
+                // insert interpolation here if needed     // won't be if blurrng is included in pyramid.    // would be needed for super resolution
+                
+                // ? would it be best to work in normalized gradient space ? => invariance to flicker and camera auto-adjustment 
+                // faster if _only_ value is used.  (? would it be possible to have a narrower fovea for hue & saturation ?)
+                // ?change to 3x monochrome channels, but recombine costs before calculating next ste ?
+                
+                // Check in range   
+                if(px_col >=0 && px_col<COLS && px_row >=0 && px_row < ROWS){                                    //get cost & count costs
+                    float diff_h = n_frame.at<Vec3b>(px_col,px_row)[0]  - prev_frame.at<Vec3b>(xd,yd)[0] ;  //hue  // need to ref previous frame                
+                    float diff_s = n_frame.at<Vec3b>(px_col,px_row)[1]  - prev_frame.at<Vec3b>(xd,yd)[1] ;  //saturation
+                    float diff_v = n_frame.at<Vec3b>(px_col,px_row)[2]  - prev_frame.at<Vec3b>(xd,yd)[2] ;  //value    
+                    //  Huber norm                                                                        
+                    if (diff_h <0) diff_h *= -1;  
+                    if (diff_s <0) diff_s *= -1;                                                       // diff_s = diff_s | 0.f;  (bitwise OR with +ve zero) nb test before use
+                    if (diff_v <0) diff_v *= -1;                                                       // nb fastest would be bit mask +ve.  //nb v is more nb than h&s.
+                    float diff = (diff_h + diff_s + diff_v) / thresh ;                        // thresh scales dif_h/s/v before Huber L1/L2 
+                    if (diff < 1) diff *= diff;                                                           // L2, otherwise leave as L1
+                    tot_cost[k]  += diff;                                                                //  rotation only so no z_buffer
+                } else {
+                    //null cost 
+                }; //cost=cost/count;
+
+            }
+        }
+    }
+    /////// predict next step:
+                                                                                                                // tot_cost[k] will hold current fit and costs of single steps of rotation.
+    float d1_pitch =  (tot_cost[1] -  tot_cost[4]) / 2;                                 // 1st differential, ie gradient  
+    float d1_yaw = (tot_cost[2] -  tot_cost[5]) / 2;
+    float d1_roll = (tot_cost[3] -  tot_cost[6]) / 2;
+    float d2_pitch = tot_cost[1] +  tot_cost[4] - 2* tot_cost[0] ;              // 2nd differential 
+    float d2_yaw = tot_cost[2] +  tot_cost[5] - 2* tot_cost[0] ;
+    float d2_roll = tot_cost[3] +  tot_cost[6] - 2* tot_cost[0] ;
+    
+    // Levenberg-Marquhard => next step & check it is an improvement.
+    // assume parabola, predict optimum
+##float curr_pitch =rotations[0][1];
+    float curr_yaw =rotations[0][1];
+    float curr_roll =rotations[0][1];
+    
+##float predicted_pitch   = (d1_pitch - d2_pitch * curr_pitch) / d2_pitch;
+    float predicted_yaw     = (d1_yaw  - d2_yaw   * curr_yaw) / d2_yaw;
+    float predicted_roll      = (d1_roll    - d2_roll    * curr_roll) / d2_roll;
+    
+    // now iterate until ? predicted step is worse - ie if (all of) this itteration's answers are worse than the previous set.
+    if(tot_cost[0] < prev_cost){
+        rotation[0]= predicted_pitch ;                                                          // ? apply damping ie Levenberg-Marquhard  // use levmar2.6 library
+        rotation[1]= predicted_yaw ;
+        rotation[2]= predicted_roll ;
+        improvement = prev_cost - tot_cost[0];
+        prev_cost = tot_cost[0];
+    }else break;
+    }while (improvement > 1);                                                                  // 1 is arbitary parameter, to halt before infinitessimal optimisation.  
+    
+}// track rotation
+/////////----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------/////////
+
+void App::track_camera_pose(){                                      // adapt for 6DoF transpose, not just rotations.
+    
+std::cout<<std::endl<<"Start track camera pose"<<std::endl<<std::flush;
+std::cout<<"rotation="<<rotation[0]<<','<<rotation[1]<<','<<rotation[2]<<std::endl<<std::flush;
+imshow(WIN_prev_frame, prev_frame);
+imshow(WIN_n_frame, n_frame);
+std::cout<<"transform="<<transform[0]<<','<<transform[1]<<','<<transform[2]<<std::endl<<std::flush;
+
+
+    float improvement =0;
+    float prev_cost = PIXELS;                                               // set high default for the fiirst itteration.
+    float tot_cost[13];                                                           // use float in case cost is very large. 
+    do{
+        float transforms[13][6];
+        for(int i=0;i<13;++i){
+            int k = 3;
+            for(int j=0;j<3;++j, ++k){
+                transforms[i][j] = rotation[j];
+                transforms[i][k] = transform[j];
+            }
+        }
+        transforms[1][0] += 0.01;  //pitch
+        transforms[2][1] += 0.01;  //yaw
+        transforms[3][2] += 0.01;  //roll
+        transforms[4][3] += 0.01;  //x translation
+        transforms[5][4] += 0.01;  //y
+        transforms[6][5] += 0.01;  //z
+        
+        transforms[7][0] -= 0.01;
+        transforms[8][1] -= 0.01;
+        transforms[9][2] -= 0.01;
+        transforms[10][3] -= 0.01;
+        transforms[11][4] -= 0.01;
+        transforms[12][5] -= 0.01;
+        
+        Mat projections[13];
+        for(int i=0;i<13;++i){
+            projections[i]  = intrinsic * build_extrinsic(transforms[i]); 
+            std::cout<<std::endl<<"Projection["<<i<<"] ="<<projections[i]<<std::endl;
+        }
+cout<<"step0"<<flush;        
+    Mat depthmap_vec = depthmap;                                    // new header for depthmap
+    depthmap_vec.resize(1);                                                   // row vector 
+    Mat oldPts_xyz = Mat::zeros(4,PIXELS,CV_32FC4);          // homogeneous 3D  with depthtmap & z_buffer
+    Mat inv_z_buffer[13];                                                       // inverse depth buffer. 0 -> infinity // put this in class etc..
+    Mat cost_map[13];                                                            // ones, to discourage expelling pixels from view => crazy rotations
+    
+std::cout<<std::endl<<"step1"<<std::flush;    
+    for(int i=0; i<13; ++i){
+        inv_z_buffer[i] =  Mat::zeros(ROWS,COLS,CV_8U); 
+        cost_map[i] = Mat::ones(ROWS,COLS,CV_32F);
+    }
+std::cout<<" step2"<<std::flush;    
+    int yd = y0 - ROWS; 
+    int xd0 = x0 - COLS;
+    int xd = 0;
+    int pixel = 1;
+    float thresh = 1.0;
+    for(int i=1;i<=ROWS;++i, ++yd){
+std::cout<<" step3"<<std::flush;   
+         xd=xd0;
+        for(int j=0 ;j<=COLS;++j, ++xd, ++pixel){
+            Vec4f old_pt;
+            float z = depthmap_vec.at<float>(pixel);                  // old z coord
+            old_pt[0] = xd * z/fx;                                                   //x   nb need to accaount for principal ray offset in loop counters
+            old_pt[1] = yd * z/fy;
+            old_pt[2] = z;
+            old_pt[3] = 1;                                                              //w coord
+     
+            for(int k=0;k<7;++k){
+                Mat new_pt = projections[k] * Mat(old_pt);  
+//std::cout<<std::endl<<"old_pt="<<old_pt<<"   new_pt="<<new_pt<<std::endl<<std::flush;
+                float x = new_pt.at<float>(0);
+                float y = new_pt.at<float>(1);
+                float z = new_pt.at<float>(2);
+                if(z <=0) continue;                                                // if new z > 0 i.e. point is infront of camera
+                float inv_z = 1/z;
+                int px_col = floor(x/z);
+//std::cout<<"x="<<x<<"  y="<<y<<"  z="<<z<<" px_col="<<px_col<<std::endl<<std::flush;
+                if( (px_col<1) || (px_col>COLS) )continue;                   // if transformed pixel is not in new frame
+                int px_row = floor(y/z);
+//std::cout<<"px_row="<<px_row<<std::endl<<std::flush;
+                if( (px_row <1) || (px_row>ROWS) )continue;
+                
+                if ( inv_z <= inv_z_buffer[k].at<u_char>(px_col,px_row))continue;         // test if this is the closest point in this view ray (pixel)
+                inv_z_buffer[k].at<u_char>(px_col,px_row) =  inv_z;
+                
+                // add pixel value interpolaton here
+                
+
+                float diff_h = n_frame.at<Vec3b>(px_col,px_row)[0]  - prev_frame.at<Vec3b>(xd,yd)[0] ; //hue  // need to ref previous frame
+                float diff_s = n_frame.at<Vec3b>(px_col,px_row)[1]  - prev_frame.at<Vec3b>(xd,yd)[1] ; //saturation
+                float diff_v = n_frame.at<Vec3b>(px_col,px_row)[2]  - prev_frame.at<Vec3b>(xd,yd)[2] ; //value
+                
+                //  Huber norm 
+                if (diff_h <0) diff_h *= -1;  
+                if (diff_s <0) diff_s *= -1;
+                if (diff_v <0) diff_s *= -1;                                          // nb fastest would be bit mask +ve.  //nb v is more nb than h&s.
+                float diff = (diff_h + diff_s + diff_v)/thresh ;
+                if (diff < 1) diff *= diff;                                              // L2, otherwise leave as L1
+                tot_cost[k]  += diff;                                                   //  rotation only so no z_buffer
+            }
+        }
+    }
+    /////// predict next step:
+    // tot_cost[k] will hold current fit and costs of single steps of rotation.
+    float d1_pitch =  (tot_cost[1] -  tot_cost[7])/2;                       // 1st differential, ie gradient  
+    float d1_yaw   = (tot_cost[2] -  tot_cost[8])/2;
+    float d1_roll    = (tot_cost[3] -  tot_cost[9])/2;
+    
+    float d1_x =  (tot_cost[4] -  tot_cost[10])/2;  
+    float d1_y =  (tot_cost[5] -  tot_cost[11])/2;  
+    float d1_z =  (tot_cost[6] -  tot_cost[12])/2;  
+    
+    float d2_pitch = tot_cost[1] +  tot_cost[7] - 2* tot_cost[0] ;  // 2nd differential 
+    float d2_yaw   = tot_cost[2] +  tot_cost[8] - 2* tot_cost[0] ;
+    float d2_roll    = tot_cost[3] +  tot_cost[9] - 2* tot_cost[0] ;
+    
+    float d2_x =  tot_cost[4] +  tot_cost[10] - 2* tot_cost[0] ; 
+    float d2_y =  tot_cost[5] +  tot_cost[11] - 2* tot_cost[0] ; 
+    float d2_z =  tot_cost[6] +  tot_cost[12] - 2* tot_cost[0] ; 
+    
+    // Levenberg-Marquhard => next step & check it is an improvement.    // use levmar2.6 library
+    // assume parabola, predict optimum
+    float curr_pitch        = transforms[0][0];
+    float curr_yaw          = transforms[0][1];
+    float curr_roll           = transforms[0][2];
+
+    float curr_x_trans    = transforms[0][3];
+    float curr_y_trans    = transforms[0][4];
+    float curr_z_trans    = transforms[0][5];
+    
+    float predicted_pitch = (d1_pitch - d2_pitch * curr_pitch)/d2_pitch;
+    float predicted_yaw   = (d1_yaw - d2_yaw * curr_yaw)/d2_yaw;
+    float predicted_roll    = (d1_roll - d2_roll * curr_roll)/d2_roll;
+    
+    float predicted_x_trans = (d1_x - d2_x * curr_x_trans)/d2_x;
+    float predicted_y_trans = (d1_y - d2_y * curr_y_trans)/d2_y;
+    float predicted_z_trans = (d1_z - d2_z * curr_z_trans)/d2_z;
+    
+    // now iterate until ? predicted step is worse - ie if (all of) this itteration's answers are worse than the previous set.
+    if(tot_cost[0] < prev_cost){
+        rotation[0]= predicted_pitch ;                                                      // ? apply damping ie Levenberg-Marquhard
+        rotation[1]= predicted_yaw ;
+        rotation[2]= predicted_roll ;
+        transform[0] = predicted_x_trans;
+        transform[1] = predicted_y_trans;
+        transform[2] = predicted_z_trans;                                               /// need to update prev_cost ######
+        improvement = prev_cost - tot_cost[0];
+        prev_cost = tot_cost[0];
+    }else break;
+    }while (improvement > 1);                                                            // 1 is arbitary parameter, to halt before infinitessimal optimisation.  
+    
+}// track camera pose
+////////--------------------------------------------------------------------------------------------------------------------------------------------------------------////////////    
+
+
+void App::depth_mapping()//(Mat img, Mat depthmap,  Mat flow)
+{
+    float depth_impr_thresh = 1.0; // arbitrary parameter  
+    float improvement = depth_impr_thresh +1.0; 
+    while(improvement > depth_impr_thresh){ // until minimal improvement 
+    // find 1'&2' gradient of fit in depthmap ... in ( photometric + Huber  * img_gradient ) cost
+    // take expected camera rotation and add two steps rpy => 6 new images 
+    // pixelwise photometric costs => 1'&2' grad rpy
+    
+    // Levenberg-Marquhard step => new rotation => is it an improvement.
+    
+    }  
+}
+
+void App::dynamicSLAM(){
+    float dSLAM_impr_thresh = 1.0; // arbitrary parameter  
+    float improvement = dSLAM_impr_thresh +1.0; 
+    while(improvement > dSLAM_impr_thresh){ // until minimal improvement 
+    // find 1'&2' gradient of fit in vel_map ... in ( photometric + Huber  * img_gradient ) cost
+    // take expected vel_map and add two steps rpy => 6 new images 
+    // pixelwise photometric costs => 1'&2' grad rpy
+    
+    // Levenberg-Marquhard step => new rotation => is it an improvement.
+    
+    }
+    
+    // earlier notes:
+    // NB express vectors in polar coords
+    // regularize direction strongly within frame ... locally with anisotropic Huber, and globally with parsimony
+    // regularize magnitude over n-frames
+}

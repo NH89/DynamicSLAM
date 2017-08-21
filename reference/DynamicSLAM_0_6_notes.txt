@@ -1,0 +1,453 @@
+
+
+fit_rotation(){
+
+make vector of 7 projection matricies
+
+send 7 sets of points for photometric cost
+
+photometric cost - find pixels floor & ceiling in rox & col, then interpolate 
+
+Q: should the new image be denoised first
+Q: should it be gaussian or TV? should it be anisotropic?
+A: If we creae a super resolution fovea then bicubic interpolation could be used there.
+A: lets use _bilinear_ interpolation for speed, and rely on the existing downscaling to eliminate the noise.
+
+// perhaps interpolation is not needed for whole image fitting (rot & trans). unless Moire effects occur.
+
+get back current fit, 1' & 2' differential of gradient in rpy
+
+
+}
+
+Get ready to test:
+1 all necessary parts written ? (and lint removed - unused functions & variables)
+2 does it compile
+3 does it execute
+4 does it crash.
+
+
+Plan debugging/testing
+
+1 verifiable outputs
+    super-imposed images  => transform sampled pixels back to previous frame, 
+        Record sequece: should give no apparent motion. 
+        Stack as layers with alpha: will show motion blur if wrong
+        
+    cout of variables, esp fitting parameters & cost.
+
+2 step through and write to file.
+    
+3 test sequences  
+    pictures with particular rotations, translations, depthmaps    eg views from MeshLab
+    initially - samples from larger pictures, subject to rotations, (and translations)
+    
+    
+///////
+
+refactor again 
+
+1/ translation tracking
+
+2/ coarse=> fine warping
+
+3/ increase code reuse => make blocks reusable 
+
+4/ tidy and setup algorithm params 
+    thresholds, step sizes, etc ...?
+    
+/////////
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+App:notes(){
+    ////////////////////////////////////////////////////////////////////////////
+    
+    extrinsic = build_extrinsic(rotation, transform);  // NB may want to keep sequence of extrinsic matrices for parallax flow.
+    projection  = intrinsic * extrinsic;
+    // Mat flow = Mat::zeros(ROWS,COLS, CV_32FC2);
+    // vectorize,   ie 
+    //newPts_xyz = projection * oldPts_xyz;  where oldPts_xyz =3D pixel coords from previous frame , ie 3channel depth_map
+    // could use project points ? nb projected points in order of old pixel coords
+    //flow = newPixels_xy - oldPixels_xy;
+    
+    Mat depthmap_vec = depthmap; // new header for depthmap
+    depthmap_vec.resize(1); // row vector
+    Mat oldPts_xyz = Mat::zeros(4,PIXELS,CV_32FC4);
+    Mat newPts_xyz = Mat::zeros(3,PIXELS,CV_32FC4); 
+    Mat newPixels_xy = Mat::zeros(3,PIXELS,CV_32FC4);  // NB will need to check if lie with in the new frame
+    /*Inverse projection given image and depthmap
+     * P3D.x = (x_d - cx_d) * depth(x_d,y_d) / fx_d
+     * P3D.y = (y_d - cy_d) * depth(x_d,y_d) / fy_d
+     * P3D.z = depth(x_d,y_d)
+     */
+    int yd = y0 - ROWS; 
+    int xd0 = x0 - COLS;
+    int xd = 0;
+    int pixel = 1;
+    for(int i=1;i<=ROWS;++i, ++yd){
+         xd=xd0;
+        for(int j=0 ;j<=COLS;++j, ++xd, ++pixel){
+            float z = depthmap_vec.at<float>(i); // 
+            oldPts_xyz.at<Vec4f>(i)[0]= xd * z/fx; //    z*i    ;//x   nb need to accaount for principal ray offset in loop counters
+            oldPts_xyz.at<Vec4f>(i)[1]= yd * z/fy; //    z*j    ;//y
+            oldPts_xyz.at<Vec4f>(i)[2]= z    ;//z
+            oldPts_xyz.at<Vec4f>(i)[3]= 1    ;//w
+        }
+    }
+    newPts_xyz = projection * oldPts_xyz;   // nb oldPts_xyz should be vec4f 3D homogeneous,    
+                                                                   // newPts_xyz 3D wrt new  image coords ? 
+    // nb for opencl kernel these two loops can be combined .
+    
+    
+    // Photometric fit  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    Mat inv_z_buffer = Mat::zeros(ROWS,COLS,CV_8U);  // inverse depth buffer. 0 -> infinity // put this in class etc..
+    Mat cost_map = Mat::ones(ROWS,COLS,CV_32F);  // ones, to discourage expelling pixels from view => crazy rotations
+    float thresh = 1.0;    
+    float tot_cost =0.f; // use float in case cost is very large. 
+    yd = y0 - ROWS; 
+    xd0 = x0 - COLS;
+    xd = 0;
+    pixel = 1;
+    int px_row = 0;
+    int px_col = 0;
+    int inv_z = 0;
+    for(int i=1;i<=ROWS;++i, ++yd){
+         xd=xd0;
+        for(int j=0 ;j<=COLS;++j, ++xd, ++pixel){
+            float x = newPts_xyz.at<Vec3f>(pixel)[0] ;
+            float y = newPts_xyz.at<Vec3f>(pixel)[1] ;
+            float z = newPts_xyz.at<Vec3f>(pixel)[2] ;
+            if (z > 0){
+                newPixels_xy.at<Vec3f>(pixel)[0] = x/z ;  // x ie column coord
+                newPixels_xy.at<Vec3f>(pixel)[1] = y/z ;  // y ie column coord
+                newPixels_xy.at<Vec3f>(pixel)[2] = 1/z ;  // inverse depth
+                px_col = floor(x/z);
+                px_row = floor(y/z);
+                inv_z = floor(1/z);
+                
+                if ( inv_z > inv_z_buffer.at<u_char>(px_col,px_row)){                   // test if this is the closest point in this view ray (pixel)
+                    inv_z_buffer.at<u_char>(px_col,px_row) =  inv_z;
+                    uchar diff_h = n_frame.at<Vec3c>(px_col,px_row)[0]  - prev_frame.at<Vec3c>(xd,yd)[0] ;//hue   // need to ref previous frame
+                    uchar diff_s = n_frame.at<Vec3c>(px_col,px_row)[1]  - prev_frame.at<Vec3c>(xd,yd)[1] ;//saturation
+                    uchar diff_v = n_frame.at<Vec3c>(px_col,px_row)[2]  - prev_frame.at<Vec3c>(xd,yd)[2] ;//value
+                    if (diff_h <0) diff_h *= -1;
+                    if (diff_s <0) diff_s *= -1;
+                    if (diff_v <0) diff_s *= -1; // nb fastest would be bit mask +ve.  //nb v is more nb than h&s.
+                    float diff = (diff_h + diff_s + diff_v)/thresh ;
+                    if (diff < 1) diff *= diff; // L2, otherwise leave as L1
+                    
+                    tot_cost  += diff - cost_map.at<float>(px_col,px_row) ;             //  replace previous cost with closer point. 
+                                                                                                                        // nb this penalizes non-zero flow divergence, eg due to parallax motion
+                    cost_map.at<float>(px_col,px_row) = diff;
+                }
+            }
+        }
+    }
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void App::rotate()//(Mat img, Mat flow)
+{ 
+
+    float rot_impr_thresh = 1.0; // arbitrary parameter  
+    float improvement = rot_impr_thresh +1.0; 
+    vector<Mat> rotations;
+    rotations.reserve(6);
+    Mat zeromat;
+    zeromat.zeros(4,4,CV_32F );
+    for(int i=0; i<6;++i){rotations.push_back(zeromat);}
+    // make incremental rotations  +/- 1degree. nb 2nd differential is the difference between gradient for two consecutive steps 
+    // Must add/subtract from expected rotation - found from previous two transposes.
+
+    
+    while(improvement > rot_impr_thresh){
+        for(int i=0; i<6;++i){
+            rotations.push_back(zeromat);
+        }
+        
+        
+    }
+/*
+    while(improvement > rot_impr_thresh){
+    // find 1'&2' gradient of fit in rotation ...  in  photometric cost
+    // take expected camera rotation and add two steps rpy => 6 new images 
+        vector<Mat> rotations; 
+        
+    // photometric costs => 1'&2' grad rpy
+    
+    // Levenberg-Marquhard step => new rotation => is it an improvement.
+    
+    }
+*/
+}
+
+
+
+void App::buildMap(Mat img, Mat flow, Mat img_map ){ // 
+    // for each pixel of the new map: read new pixel bin, if new pixel_z is closer, replace pixel in bin (record xyz, hsv)
+    int rows = img.rows;
+    int cols = img.cols;
+    for(int i=0; i<rows; i++){
+        for(int j=0;j<cols;j++){ //cv::Vec3s   ie 3chan signed char // Vec3b ie uchar,  Vec3c for CV8C3 ie char
+             int newx = j+ floor( flow.at<Vec2f>(i,j)[0]);/*xflow*/
+             int newy = i+floor(flow.at<Vec2f>(i,j)[1]);/*yflow*/;
+             if (newx < cols && newx >=0 && newy < rows && newy >=0){
+                 img_map.at<Vec3b>(newy, newx) =  img.at<Vec3b>(i,j) ; 
+            }
+        }
+    }
+}
+
+
+void App::photometric_cost(Mat old_img, Mat new_img, Mat cost_map, float& tot_cost ){
+    tot_cost =0.f; // use float in case cost is very large. 
+    int rows = img.rows;
+    int cols = img.cols;
+    float thresh = 1.0;                                                      // threshold for Huber norm nb set globally.
+    for(int i=0; i<rows; i++){
+        for(int j=0;j<cols;j++){
+            Vec3b old_px = old_img.at<Vec3b>(i,j); 
+            Vec3b new_px = new_img.at<Vec3b>(i,j); 
+            uchar diffh = old_px[0] - new_px[0];
+            uchar diffs = old_px[1] - new_px[1];
+            uchar diffv = old_px[2] - new_px[2];
+            if (diffh <0) diffh *= -1;
+            if (diffs <0) diffs *= -1;
+            if (diffv <0) diffs *= -1; // nb fastest would be bit mask +ve.
+            float diff = (diffh + diffs + diffv)/thresh ;
+            if (diff < 1) diff *= diff; // L2, otherwise leave as L1
+            cost_map.at<float>(i,j) = diff;
+            tot_cost  += diff;
+        }
+    }
+}
+
+
+///////////////////////////////////////////////////////////
+    Mat newPts_xyz_[7];
+    for(int i=0; i<7; ++i){
+        newPts_xyz_[i] = projections[i] * oldPts_xy;   // nb oldPts_xyz should be vec4f 3D homogeneous,    
+    }
+
+    // for each point 
+        // for each rotation
+            // transform to new camera_pose
+            // find new pixel coord
+            // check/update  inv_z_buffer
+                // check photometric cost
+                // update cost map & tot_cost
+    //# debug - record cost maps & costs 
+    // if cost is less than previous
+        // calc next iter 
+    // else break
+    
+    ////////////////////////////////////
+    Mat depthmap_vec = depthmap; // new header for depthmap
+    depthmap_vec.resize(1); // row vector
+    Mat oldPts_xyz = Mat::zeros(4,PIXELS,CV_32FC4);
+    Mat newPts_xyz_[7];// = Mat::zeros(3,PIXELS,CV_32FC4); 
+    Mat newPixels_xy_[7];// = Mat::zeros(3,PIXELS,CV_32FC4);  // NB will need to check if lie with in the new frame
+
+    int yd = y0 - ROWS; 
+    int xd0 = x0 - COLS;
+    int xd = 0;
+    int pixel = 1;
+    for(int i=1;i<=ROWS;++i, ++yd){
+         xd=xd0;
+        for(int j=0 ;j<=COLS;++j, ++xd, ++pixel){
+            float z = depthmap_vec.at<float>(i); //   
+            oldPts_xyz.at<Vec4f>(i)[0]= xd * z/fx; //    z*i    ;//x   nb need to accaount for principal ray offset in loop counters
+            oldPts_xyz.at<Vec4f>(i)[1]= yd * z/fy; //    z*j    ;//y
+            oldPts_xyz.at<Vec4f>(i)[2]= z    ;//z
+            oldPts_xyz.at<Vec4f>(i)[3]= 1    ;//w
+        }
+    }
+    for(int i=0; i<7; ++i){
+        newPts_xyz_[i] = projections[i] * oldPts_xyz;   // nb oldPts_xyz should be vec4f 3D homogeneous,    
+    }
+
+    
+    
+    
+    }while(0); // need to set loop/break condition
+}
+/////////////////////////////////////////////////////
+    Mat newPts_xyz_[13];// = Mat::zeros(3,PIXELS,CV_32FC4); 
+    Mat newPixels_xy_[13];// = Mat::zeros(3,PIXELS,CV_32FC4);  // NB will need to check if lie with in the new frame
+
+     /*       
+    float rotations[7][3];   // replace with      float transforms[13][6];
+    for(int i=0;i<3;++i){
+        for(int j=0;j<7;++j){
+            rotations[j][i]=rotation[i];
+        }
+    }
+    rotations[1][0] += 1;  //pitch about x axis
+    rotations[2][1] += 1;  //yaw about y axis
+    rotations[3][2] += 1;  //roll about z axis
+    rotations[4][0] -= 1;   // -ve steps
+    rotations[5][1] -= 1;
+    rotations[6][2] -= 1;
+   
+    Mat extrinsics[7];
+    Mat projections[7];
+    for(int i=0;i<7;++i){ 
+        extrinsics[i]=build_extrinsic(rotations[i],transform); 
+        projections[i]  = intrinsic * extrinsics[i];
+    }
+*/  
+
+
+            /*
+            float z = depthmap_vec.at<float>(i); // 
+            oldPts_xyz.at<Vec4f>(i)[0]= xd * z/fx; //    z*i    ;//x   nb need to accaount for principal ray offset in loop counters
+            oldPts_xyz.at<Vec4f>(i)[1]= yd * z/fy; //    z*j    ;//y
+            oldPts_xyz.at<Vec4f>(i)[2]= z    ;//z
+            oldPts_xyz.at<Vec4f>(i)[3]= 1    ;//w
+            */
+       
+       
+           
+void old_track_pose(){    
+    for(int i=0; i<13; ++i){
+        newPts_xyz_[i] = projections[i] * oldPts_xyz;            // nb oldPts_xyz should be vec4f 3D homogeneous,    
+    }
+    
+    // Photometric fit  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    Mat inv_z_buffer[7]; // inverse depth buffer. 0 -> infinity // put this in class etc..
+    Mat cost_map[7]; // ones, to discourage expelling pixels from view => crazy rotations
+    for(int i=0; i<7; ++i){
+        inv_z_buffer[i] =  Mat::zeros(ROWS,COLS,CV_8U); 
+        cost_map[i] = Mat::ones(ROWS,COLS,CV_32F);
+    }
+    
+//    float thresh = 1.0;    
+
+    for(int i=0;i<7;++i){tot_cost[i]=0.f;}
+    yd = y0 - ROWS; 
+    xd0 = x0 - COLS;
+    xd = 0;
+    pixel = 1;
+    int px_row = 0;
+    int px_col = 0;
+    int inv_z = 0;
+    for(int i=1;i<=ROWS;++i, ++yd){
+         xd=xd0;
+        for(int j=0 ;j<=COLS;++j, ++xd, ++pixel){                                                // for each pixel
+            for(int k=0; k<7; ++k){                                                                           // for each increment of rotation
+                float x = newPts_xyz_[k].at<Vec3f>(pixel)[0] ;
+                float y = newPts_xyz_[k].at<Vec3f>(pixel)[1] ;
+                float z = newPts_xyz_[k].at<Vec3f>(pixel)[2] ;
+                if (z > 0){
+                    newPixels_xy_[k].at<Vec3f>(pixel)[0] = x/z ;  // x ie column coord
+                    newPixels_xy_[k].at<Vec3f>(pixel)[1] = y/z ;  // y ie column coord
+                    newPixels_xy_[k].at<Vec3f>(pixel)[2] = 1/z ;  // inverse depth
+                    px_col = floor(x/z);
+                    px_row = floor(y/z);
+                    inv_z = floor(1/z);
+                    if ( inv_z > inv_z_buffer[k].at<u_char>(px_col,px_row)){                   // test if this is the closest point in this view ray (pixel)
+                        inv_z_buffer[k].at<u_char>(px_col,px_row) =  inv_z;
+                        float diff_h = n_frame.at<Vec3b>(px_col,px_row)[0]  - prev_frame.at<Vec3b>(xd,yd)[0] ;//hue  // need to ref previous frame
+                        float diff_s = n_frame.at<Vec3b>(px_col,px_row)[1]  - prev_frame.at<Vec3b>(xd,yd)[1] ;//saturation
+                        float diff_v = n_frame.at<Vec3b>(px_col,px_row)[2]  - prev_frame.at<Vec3b>(xd,yd)[2] ;//value
+                        if (diff_h <0) diff_h *= -1;
+                        if (diff_s <0) diff_s *= -1;
+                        if (diff_v <0) diff_s *= -1; // nb fastest would be bit mask +ve.  //nb v is more nb than h&s.
+                        float diff = (diff_h + diff_s + diff_v)/thresh ;
+                        if (diff < 1) diff *= diff; // L2, otherwise leave as L1
+                                                                                                            // nb this penalizes non-zero flow divergence, eg due to parallax motion                    
+                        tot_cost[k]  += diff - cost_map[k].at<float>(px_col,px_row) ;             //  replace previous cost with closer point. 
+                        cost_map[k].at<float>(px_col,px_row) = diff;
+                    }
+                }
+            }
+        }
+    }
+    
+    
+    /////// predict next step:
+    
+    // tot_cost[k] will hold current fit and costs of single steps of rotation.
+    float d1_pitch =  (tot_cost[1] -  tot_cost[4])/2; // 1st differential, ie gradient  
+    float d1_yaw = (tot_cost[2] -  tot_cost[5])/2;
+    float d1_roll = (tot_cost[3] -  tot_cost[6])/2;
+    float d2_pitch = tot_cost[1] +  tot_cost[4] - 2* tot_cost[0] ;  // 2nd differential 
+    float d2_yaw = tot_cost[2] +  tot_cost[5] - 2* tot_cost[0] ;
+    float d2_roll = tot_cost[3] +  tot_cost[6] - 2* tot_cost[0] ;
+    
+    // Levenberg-Marquhard => next step & check it is an improvement.
+    // assume parabola, predict optimum
+    float curr_pitch =rotations[0][1];
+    float curr_yaw =rotations[0][1];
+    float curr_roll =rotations[0][1];
+    
+    float predicted_pitch = (d1_pitch - d2_pitch * curr_pitch)/d2_pitch;
+    float predicted_yaw = (d1_yaw - d2_yaw * curr_yaw)/d2_yaw;
+    float predicted_roll = (d1_roll - d2_roll * curr_roll)/d2_roll;
+    
+    // now iterate until ? predicted step is worse - ie if (all of) this itteration's answers are worse than the previous set.
+    if(tot_cost[0] >= prev_cost){break;}
+    else {
+        rotation[0]= predicted_pitch ;  // ? apply damping ie Levenberg-Marquhard
+        rotation[1]= predicted_yaw ;
+        rotation[2]= predicted_roll ;
+    }
+    }while(tot_cost[0] >= prev_cost);  //  or put a for loop to limit time?  // use coarsee=>fine warping ?
+} // fit rotation
+
+    /* Projection formulae 
+     * 
+     * theta_x  pitch              * theta_y  yaw              * theta_z  roll
+     * (1    0      0  )              * (cos  0   sin)                * (cos  -sin  0)
+     * (0    cos  -sin)             * (0     1     0)                * (sin   cos  0)
+     * (0    sin   cos)             * (-sin  0   cos)               * (0      0     1)
+     * nb must always use same sequence of rotations. (not commutative)
+     * 
+     * Extrinsic matrix [R|t]   use hconcat()  and vconcat().    (nb the bottom row is used if transforming 3D points)
+     * (r11 r12 r13  |  t1  )
+     * (r21 r22 r23  |  t2  )
+     * (r31 r32 r33  |  t3  )
+     * (0    0     0     |  1   )
+     * 
+     * Intrinsic matrix , fx, fy focal length, x0,y0 principle ray offset.   nb default fx=fy, skew=0, x0,y0=centre
+     * (fx  skew  x0)
+     * (0   fy       y0)
+     * (0   0        1  )
+     * 
+     * Projection matrix P(3x4) = intrinsic(3x3) * extrinstic(3x4)
+     * nb matrix multiplication is associative (BA)x = B(Ax)
+     * 
+     * nb matrix dims (rows x cols)
+     * matrix of homogeneous points  =  P projection matrix     *   matrix of  original points
+     *          (nx3)                                                (3x4)                               (4xn)
+     * [ x1 x2 ... xn]
+     * [ y1 y2 ... yn]
+     * [ z1 z2  ... zn]
+     *
+     * Image coords  (x1/z1 , y1/z1)
+    */
+
+    
+    
+    
+    
+    

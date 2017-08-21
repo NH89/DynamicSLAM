@@ -1,0 +1,108 @@
+Libraries
+#############
+Target GPU, load image & hold data on GPU
+OpenCV UMat
+OpenCL
+Sophus SE(3)/SO(3) 
+
+
+Loop
+##############
+
+key frame (new if num pts tracked < min tracked) 
+#############
+canny edge points from spaial gradient (for each point list connected points, used for TV_L1)
+
+New frame 
+############
+dewarp
+resize (or image pyramid)
+monochrome (or Lab colour)
+spatial gradient
+
+
+Tracking
+#############
+predict next SE(3) transformation  
+K T K^-1
+Transform points to new coords
+
+bi-cubic (bi-linear) sample image at transformed Canny points
+=> photometric diff  & img  grad at transformed pts 
+NB null for off screen pts ?
+
+
+Calibration 
+#############
+given SE(3) adjust  K, brightness, contrast, and DewarpMap 
+NB need pts in 9 boxes, take mean error of boxes. 
+Start with 1st order params.
+Handle skew in deawarp?
+
+
+DepthMap & Velmap 
+###############
+Acceleration cost on Velmap
+TV_L2 cost on gradients on both maps, 
+This allows an edge to move quickly as one 
+
+
+Joint optimisation of total cost on all gradients.   NB 1st loop, only adjust SO(3)
+###############
+prep jacobians : image grad * J_SE(3)  at keframe and at new loc.
+pseudo inv of sum of jacobians
+delta_x_se3  =  J^+ * photometric diff
+Do-While( max_iter,  photometric diff > halt )
+
+NB total Fisher information of model & KL-divergence of model from image
+
+Debugging
+##############
+At each step save to file & display image + data.
+
+
+
+
+
+
+Densification
+###############
+Foveated with canny edges
+Then variable resolution blocks between edges - depending on (Fisher?) information in each sub-block.
+Anisotropic TV_L1,
+
+
+Reflectance & Ilumination maps
+##############
+anisotropic TV_L1
+convexity
+parsimony
+
+
+Reflectance & Illuminattion Pallates
+##############
+16 params cosinelobe  BDRF 
+
+
+Smoothed Particle integration
+###############
+Visible patches => visible particles
+TV_L1 between particles
+
+
+Material Pallete
+###############
+
+
+
+
+
+
+
+
+
+
+
+
+
+

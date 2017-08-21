@@ -1,0 +1,6 @@
+<map id="main" name="main">
+<area shape="rect" id="node2" href="$class_app.html#a7e025438d0a76fe534ed75505517eccc" title="App::App" alt="" coords="104,5,180,32"/>
+<area shape="rect" id="node3" href="$class_app.html#a8d27eeb51b813760dc39425d7a9a37e2" title="App::run" alt="" coords="107,56,177,83"/>
+<area shape="rect" id="node4" href="$class_app.html#a49208bffd121437ed0268016279a306f" title="App::initVideoSource" alt="" coords="228,31,372,57"/>
+<area shape="rect" id="node5" href="$class_app.html#a245ec55183a24cfe5e39e7a3c9945fbc" title="App::setRunning" alt="" coords="241,81,359,108"/>
+</map>

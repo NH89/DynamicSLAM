@@ -1,0 +1,7 @@
+[
+{
+  "directory": "/home/nick/Programming/ComputerVision/DynamicSLAM/build/src",
+  "command": "/usr/bin/c++    -I\"/home/nick/Programming/ComputerVision/DynamicSLAM/src/\\$$HOME/Programming/otherLibraries/GSL/include\" -isystem /usr/local/include -isystem /usr/local/include/opencv  -ggdb -Wall -std=c++14  -g   -o CMakeFiles/DynamicSLAM_07.dir/DynamicSLAM_0_7.cpp.o -c /home/nick/Programming/ComputerVision/DynamicSLAM/src/DynamicSLAM_0_7.cpp",
+  "file": "/home/nick/Programming/ComputerVision/DynamicSLAM/src/DynamicSLAM_0_7.cpp"
+}
+]

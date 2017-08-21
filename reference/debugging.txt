@@ -1,0 +1,87 @@
+
+#0 __GI_raise() at /build/glibc-t3gR2i/glibc-2.23/signal/../sysdeps/unix/sysv/linux/raise.c:54
+#1 __GI_abort() at /build/glibc-t3gR2i/glibc-2.23/stdlib/abort.c:89
+#2 __gnu_cxx::__verbose_terminate_handler()() at /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#3 ??() at /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#4 std::terminate()() at /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#5 __cxa_throw() at /usr/lib/x86_64-linux-gnu/libstdc++.so.6
+#6 cv::error(cv::Exception const&)() at /usr/local/lib/libopencv_core.so.3.1
+#7 cv::error(int, cv::String const&, char const*, char const*, int)() at /usr/local/lib/libopencv_core.so.3.1
+#8 cv::resize(cv::_InputArray const&, cv::_OutputArray const&, cv::Size_<int>, double, double, int)() at /usr/local/lib/libopencv_imgproc.so.3.1
+#9 ImgColumn::prepFrame() at /home/nick/Programming/ComputerVision/DynamicSLAM/DynamicSLAM_0_3.cpp:120
+#10 ImgColumn::ImgColumn() at /home/nick/Programming/ComputerVision/DynamicSLAM/DynamicSLAM_0_3.cpp:156
+#11 App::App() at /home/nick/Programming/ComputerVision/DynamicSLAM/DynamicSLAM_0_3.cpp:298
+#12 main() at /home/nick/Programming/ComputerVision/DynamicSLAM/DynamicSLAM_0_3.cpp:410
+
+
+
+
+
+Press ESC to exit
+
+App::App constructor  m_file_name=.
+PrepFrame:  frame.rows=0   frame.cols=0   frame.depth=0
+
+######
+
+
+Press ESC to exit
+
+App::App constructor  m_file_name=/home/nick/Programming/ComputerVision/OpenCV/opencv-master/opencv/samples/data/Megamind.avi.
+construct App:  &zeroUMat.rows=0
+ ImgColumn constructor : firstFrame.rows=0
+*** Program received signal SIGABRT (Aborted) ***
+PrepFrame:  &frame.rows=0x7fffffffdcd8   frame.cols=0   frame.depth=0
+
+
+#########
+
+
+Press ESC to exit
+
+App::App constructor  m_file_name=/home/nick/Programming/ComputerVision/OpenCV/opencv-master/opencv/samples/data/Megamind.avi.
+construct App:  zeroUMat.rows=2048
+construct App:  zeroUMat.rows=2048
+ ImgColumn constructor : firstFrame.rows=2048
+PrepFrame:  &frame.rows=0x7fffffffdcd8   frame.cols=1024   frame.depth=1
+
+OpenCV Error: Assertion failed (A.size() == Size(3,3) && A.size() == R.size()) in initUndistortRectifyMap, file /home/nick/Programming/ComputerVision/OpenCV/opencv-master/opencv/modules/imgproc/src/undistort.cpp, line 102
+
+terminate called after throwing an instance of 'cv::Exception'
+  what():  /home/nick/Programming/ComputerVision/OpenCV/opencv-master/opencv/modules/imgproc/src/undistort.cpp:102: error: (-215) A.size() == Size(3,3) && A.size() == R.size() in function initUndistortRectifyMap
+
+*** Program received signal SIGABRT (Aborted) ***
+
+###############################
+
+Press ESC to exit
+
+App::App constructor  m_file_name=/home/nick/Programming/ComputerVision/OpenCV/opencv-master/opencv/samples/data/Megamind.avi.
+construct App:  zeroUMat.rows=2048
+construct App:  zeroUMat.rows=2048
+ ImgColumn constructor : firstFrame.rows=2048
+PrepFrame:  &frame.rows=0x7fffffffdcd8   frame.cols=1024   frame.depth=1
+scaled.rows=1024  undist.rows=0  cameraMatrix.rows=3  distCoeffs.rows=0
+
+##################
+
+Press ESC to exit
+
+App::App constructor  m_file_name=/home/nick/Programming/ComputerVision/OpenCV/opencv-master/opencv/samples/data/Megamind.avi.
+construct App:  zeroUMat.rows=2048
+construct App:  zeroUMat.rows=2048
+ ImgColumn constructor : firstFrame.rows=2048
+PrepFrame:  &frame.rows=0x7fffffffdcd8   frame.cols=1024   frame.depth=1
+scaled.rows=1024  undist.rows=0  cameraMatrix.rows=3  distCoeffs.rows=1
+
+OpenCV Error: Assertion failed (A.size() == Size(3,3) && A.size() == R.size()) in initUndistortRectifyMap, file /home/nick/Programming/ComputerVision/OpenCV/opencv-master/opencv/modules/imgproc/src/undistort.cpp, line 102
+terminate called after throwing an instance of 'cv::Exception'
+  what():  /home/nick/Programming/ComputerVision/OpenCV/opencv-master/opencv/modules/imgproc/src/undistort.cpp:102: error: (-215) A.size() == Size(3,3) && A.size() == R.size() in function initUndistortRectifyMap
+
+*** Program received signal SIGABRT (Aborted) ***
+
+Mat distCoeffs = (Mat_<double>(5,1) << 0.1, 0.01, -0.001, 0, 0);
+
+
+
+

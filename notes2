@@ -1,0 +1,228 @@
+
+  /* Projection formulae 
+     * 
+     * theta_x  pitch              * theta_y  yaw              * theta_z  roll
+     * (1    0      0  )              * (cos  0   sin)                * (cos  -sin  0)
+     * (0    cos  -sin)             * (0     1     0)                * (sin   cos  0)
+     * (0    sin   cos)             * (-sin  0   cos)               * (0      0     1)
+     * nb must always use same sequence of rotations. (not commutative)
+     * 
+     * Extrinsic matrix [R|t]   use hconcat()  and vconcat().    (nb the bottom row is used if transforming 3D points)
+     * (r11 r12 r13  |  t1  )
+     * (r21 r22 r23  |  t2  )
+     * (r31 r32 r33  |  t3  )
+     * (0    0     0     |  1   )
+     * 
+     * Intrinsic matrix , fx, fy focal length, x0,y0 principle ray offset.   nb default fx=fy, skew=0, x0,y0=centre
+     * (fx  skew  x0)
+     * (0   fy       y0)
+     * (0   0        1  )
+     * 
+     * Projection matrix P(3x4) = intrinsic(3x3) * extrinstic(3x4)
+     * nb matrix multiplication is associative (BA)x = B(Ax)
+     * 
+     * nb matrix dims (rows x cols)
+     * matrix of homogeneous points  =  P projection matrix     *   matrix of  original points
+     *          (nx3)                                                (3x4)                               (4xn)
+     * [ x1 x2 ... xn]
+     * [ y1 y2 ... yn]
+     * [ z1 z2  ... zn]
+     *
+     * Image coords  (x1/z1 , y1/z1)
+    */
+    
+        
+/* Inverting the projection matrix
+ * 
+ * nb there is no inverse to the projection function because it is one (pixel) to many (inifinte points of a viewing ray)
+ * 
+ * For projection matrix  (from Stephen Lovegrove's PhD thesis 'Parametric dense visual SLAM)
+ * 
+ *  K =  (fx  0    u0)   , ie skew=0,            k^-1  =  ( 1/fx  0     -u0/fx ) 
+ *          (0   fy   v0)                                                (   0    1/fy  -v0/fy ) 
+ *          (0   0    1  )                                                (   0     0       1      )
+ * 
+ * Homogeneous pixels  X  inverse projection = viewing rays (dx/dz , dy,dz) in camera frame
+ * 
+ * 3D points = Depthmap  '.'  Viewing rays ,   where '.' is elememtwise multiplication.  
+ * ie  point P(xyz) = Z.K^-1 U  ,  where U(u,v,1) is the homogeneuos coords of the pixel, and Z is the depth map along the Z axis. 
+ * nb Z is a 'free parameter' and forms the z coord of P(xyz).
+ * 
+ * The "plane induced homography"  describes transformation in image space between two cameras observing a common plane. 
+ * It is a projective transform ie straight lines remain straight (for pinhole cameras.)
+ * It can be represented by 3x3 marix H^ba from frame a to frame b, 
+ * transforming homogeneous image coords  u^b = H^ba  u^a  .
+ * 
+ * For Pure SO(3) rotation   homography from pose b to pose a:     H^ba  = K Rot^ba K^-1
+ * 
+ * For SE(3) transpose:  H^ba = K Tfm^ba ( Z.K^1 (u^a)
+ * Where Tfm^ba is 3x4 transformation matrix :  ( Rot^ba | Trans^ba )
+ * 
+ * Homographic Image warp :  for I^r reference image, I^s synthetic image
+ * I^s =  I^r (pi (H^rs u_s))  , 
+ * where   u_r = H^rs u_s  
+ * and projection function    pi (x y z) = (x/z , y/z)    performs "homogeneous division"
+ * NB if downscaling, need to apply gaussian convolution before interpolating to find values of I^s.
+ * 
+ */
+   
+   
+/* Lie Group representation of Rotations SO(3) and Transformations SE(3)
+ * 
+ * Lie Group SO(3) :  R(x) = exp( SUM i=1 to 3 of [ x_i gen_i ] ) ,  x element of Lie Algebra  so_3
+ * 
+ * Lie Group SE(3) :   T(x) = exp( SUM i=1 to 6 of [ x_i gen_i ] ) ,  x element of Lie Algebra  se_3
+ * 
+ * 
+ * Partial derivative wrt to Lie algebra elements  about 0 are trivially formedfrom the group generators
+ * 
+ * for SO(3)
+ * dR(x) |              =  gen_i  ,   gen_0 =  (0 0 0)  ,  gen_1 = (0 0 -1)  ,  gen_2 = (0   1 0)
+ * dx      |x=0                                         (0 0 1)                   (0  0  0)                   (-1 0 0)
+ *                                                           (0 -1 0)                   (1 0  0)                   ( 0  0 0)
+ * 
+ * for SE(3)
+ * dT(x)|           = gen_i  ,  gen_0 = (0 0 0 1) ,  gen_1 = (0 0 0 0)  ,  gen_2 = (0 0 0 0)  ,  gen_3 = (0 0 0 0)  ,  gen_4 = (0 0 -1 0) ,  gen_5 = (0 1 0 0)
+ * dx_i  |x=0                                    (0 0 0 0) ,                (0 0 0 1)  ,                (0 0 0 0)  ,                (0 0 1 0)  ,                (0 0  0  0) ,                (-1 0 0 0)
+ *                                                     (0 0 0 0) ,                (0 0 0 0)  ,                (0 0 0 1)  ,                (0 -1 0 0)  ,               (1 0  0  0) ,                (0 0 0 0)
+ *                                                     (0 0 0 0) ,                (0 0 0 0)  ,                (0 0 0 0)  ,                (0 0 0 0)  ,                (0 0  0  0) ,                (0 0 0 0)
+ * 
+ */
+ 
+ 
+ 
+/* Partial derivatives of Euler angles
+ * 
+ * nb d_sin(theta)/dx = cos(theta),  d_cos(theta)/dx = - sin(theta)
+ * 
+ *      * theta_x  pitch              * theta_y  yaw              * theta_z  roll
+     * (1    0      0  )              * (cos  0   sin)                * (cos  -sin  0)
+     * (0    cos  -sin)             * (0     1     0)                * (sin   cos  0)
+     * (0    sin   cos)             * (-sin  0   cos)               * (0      0     1)
+ * 
+ *   d_theta_x/d  pitch         d_theta_y/d  yaw         d_theta_z/d  roll   NB sin(0) = 0, cos(0) = 1, so  these become equivalent to the SO(3) generators, depending on directions of rotation.
+     * (1    0      0  )              * (-sin  0   cos)               * (-sin  cos  0)
+     * (0    -sin  -cos)             * (0     1     0)                * (cos   -sin 0)
+     * (0     cos  -sin)             * (cos  0   -sin)               * (0      0     1)
+ * 
+ * 
+ */
+
+ 
+ 
+//  pseudo inverse of a Jacobian
+/*
+ *  J^+ =   (J^T  J)^(-1)    J^T   
+ * Where the image is vectorized and monochrome, the jacobian is an nx2 matrix, and (J^T J) is a 2x2 matrix.
+*/ 
+
+
+/*  inverse of 2x2 matrix
+ * e = 1 / (ad-bc)
+ * 
+ * (a  b)^(-1)   =    e *   ( d  -a ) 
+ * (c  d)                          ( -c   b )
+ */
+
+     /* temp * J^T
+     * For temp_ik * J^T_kj :    pinv_ij = (k=1->2) SUM Aik * Bkj     =      temp_i1 * J_j1  + tempi2 *J_j2
+    */
+ 
+ 
+ 
+/* Prep frame
+ * 
+ * resize
+ * undistort 
+ * convert colour rgb2lba
+ * build pyramid(s)
+ * 
+ * // early version just create small monochrome image, no pyramid
+ * // NB can incorporate scaling in camera focal length in initUndistortRectifyMap(...)
+ * //  cvtColor(m_frame,m_frame,COLOR_RGB2Lab, 3) //after resize
+ */
+
+
+//  efficient second order minimization
+/*
+ * OpenCV UMat  -  find (i)canny edges of key frame, (ii)x,y intensity gradients of current frame, and 
+ * both reduced or foveated.
+ *
+ * Sophus  -  generate (i) transformation matrix from Lie algebra (ii)Jacobian wrt Lie Algebra
+ * 
+ * OpenCV UMat - rotate canny edges into current frame 
+ * Own interpolation fn in OpenCL
+ * => (i)gradients at Canny points of keyframe (ii)delta_S photometric error
+ * handle NULL ie out of frame pixels, without encouraging instability.
+ * 
+ * 
+ * J_frame   =  J_se3  *  J_transform  *  spatialGradient_frame
+ * 
+ *
+ * pseudoInverseNx2(J_keyframe  +  J_currentframe)
+ * 
+ * multiply by delta_S
+ * 
+ * => next step in params of warp.
+ * 
+ * 
+ * For warp params thread:
+ * sample undistort warp gradient (nb applied to both keyframe and current frame)
+ * find gradient of warp function
+ * 
+ * multiply by gradient of warp params
+ * 
+ */
+ 
+//  efficient second order minimization
+/*
+ * (Uses Jacobian of state vector (rotation,translation,etc) Eliminates need for Hessian, but uses pseudo inverse of Jacobian of image.)
+ * Kinematic eq   x_dot = f(x,v)   links input v to the derivitive of the state vector x_dot.
+ * 
+ * Delta_x  aprox= -2lambda ( J(x1) + J(x2) )^+ delta_s   
+ * where delta_s is the difference in image intensities (and lambda is a   parameter  ?)
+ * 
+ */
+ 
+ /* Prep frame
+ * 
+ * resize
+ * undistort 
+ * convert colour rgb2lba
+ * build pyramid(s)
+ * 
+ * // early version just create small monochrome image, no pyramid
+ * // NB can incorporate scaling in camera focal length in initUndistortRectifyMap(...)
+ * //  cvtColor(m_frame,m_frame,COLOR_RGB2Lab, 3) //after resize
+ */
+ 
+     // spatial gradient of image (for each layer and channel of pyramid) 
+    /*void cv::spatialGradient 	( 	InputArray  	src,
+		OutputArray  	dx,
+		OutputArray  	dy,
+		int  	ksize = 3,
+		int  	borderType = BORDER_DEFAULT 
+	) 	
+     */
+ 
+     // canny threshold  => vector of points for camera tracking   (for each layer and channel of pyramid) 
+    /*void cv::Canny 	( 	InputArray  	dx,
+		InputArray  	dy,
+		OutputArray  	edges,
+		double  	threshold1,
+		double  	threshold2,
+		bool  	L2gradient = false 
+	) 	
+    */
+    
+     /* initUndistortRectifyMap 	(
+        InputArray  	cameraMatrix,              intrinsic
+		InputArray  	distCoeffs,
+		InputArray  	R,                                   Mat::eye(3,3,CV_32F) ?
+		InputArray  	newCameraMatrix,        intrinsic
+		Size  	size, (of new image)               Size(ROWS,COLS)
+		int  	m1type,                                     CV_16SC2 or  CV_32FC1
+		OutputArray  	map1,                        dewarp_map_xy,
+		OutputArray  	map2                        none if map1 is 2channel.
+	) 	
+     */
