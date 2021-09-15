@@ -1,5 +1,0 @@
-/home/nick/Programming/ComputerVision/DynamicSLAM/build/CMakeFiles/edit_cache.dir
-/home/nick/Programming/ComputerVision/DynamicSLAM/build/CMakeFiles/rebuild_cache.dir
-/home/nick/Programming/ComputerVision/DynamicSLAM/build/src/CMakeFiles/edit_cache.dir
-/home/nick/Programming/ComputerVision/DynamicSLAM/build/src/CMakeFiles/rebuild_cache.dir
-/home/nick/Programming/ComputerVision/DynamicSLAM/build/src/CMakeFiles/DynamicSLAM_05.dir
