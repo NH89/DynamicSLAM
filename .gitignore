@@ -1,0 +1,6 @@
+./build/*
+./clevo/build ./clevo/build-old
+.kdev4/DynamicSLAM.kdev4
+./clevo
+./clevo/
+clevo/
